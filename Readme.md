@@ -43,3 +43,7 @@ Column names are:
     "team_2_goaltender_1_time", "team_2_goaltender_2_time","team_2_empty_net_time"
 
 ```
+
+# Details
+
+There was one match in season 19/20 where there were three goaltenders in one match - for such cases it was implemented that we add the time of the one goalkeeper that was there the least amount of time to the one who was there 2nd (in terms of order of length of appearence.)

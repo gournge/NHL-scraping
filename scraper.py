@@ -283,29 +283,52 @@ def analyze_report(url, team1, team2):
         if (team1 in first_row.get_text().lower()) or (team2 in first_row.get_text().lower()):
             goaltender_tables.append(table)
     
-    game_time = None
-    goaltenders = [[0, 0], [0, 0]]
-    analyzed_goaltenders = 0
-    for row in goaltender_tables[0].find_all('tr'):
+    rows = goaltender_tables[0].find_all('tr')
+    list_of_row_data = [[cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])] for row in rows]
+    list_of_row_data = [rd for rd in list_of_row_data if len(rd) > 2]
 
-        row_data = [cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]
+    game_time = None
+    goaltenders_unprocessed = [[0, 0, 0], [0, 0, 0]]
+    number_of_all_goaltenders = len([1 for row_data in list_of_row_data if row_data[1] == 'G'])
+    current_goaltender = 0
+    analyzed_goaltenders = 0
+    section = 0
+    for row_data in list_of_row_data:
+
+        if analyzed_goaltenders == number_of_all_goaltenders: 
+            break
+
+        if row_data[2] == 'GOALS-SHOTS AGAINST':
+            section += 1
+            current_goaltender = 0
+            continue
 
         if row_data[0] == 'TEAM TOTALS' and game_time is None:
             game_time = process_time(row_data[4])
-            continue
-
-        if len(row_data) < 2: 
             continue
 
         # player numbers are between 1 and 98 inclusive
         if (row_data[1] != 'G') or (len(row_data[0]) > 2):
             continue
 
-        goaltenders[analyzed_goaltenders // 2][analyzed_goaltenders % 2] += process_time(row_data[3])
+        goaltenders_unprocessed[section - 1][current_goaltender] += process_time(row_data[6])
+        current_goaltender += 1
         analyzed_goaltenders += 1
 
+    # because there is one special case where there are three goaltenders,
+    # we add the time of the one goalkeeper that was there the least amount of time to the one
+    # who was there 2nd (in terms of order of length of appearence)
+
+    s1 = sorted(goaltenders_unprocessed[0], reverse = True)
+    s2 = sorted(goaltenders_unprocessed[1], reverse = True)
+
+    s1[1] += s1[-1]
+    s2[1] += s2[-1]
+
+    goaltenders = [s1[:2], s2[:2]] 
+
     # because of overtime empty net cant be negative
-    data += goaltenders[0] + [max(3600 - sum(goaltenders[0]), 0)] + goaltenders[1] + [max(3600 - sum(goaltenders[1]), 0)]
+    data += goaltenders[0] + [game_time - sum(goaltenders[0])] + goaltenders[1] + [game_time - sum(goaltenders[1])]
     
     data = [game_time] + data
 
