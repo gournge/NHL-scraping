@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import csv
 import regex as re
+import argparse
 
 def process_time(str_value):
 
@@ -36,6 +37,8 @@ def process_occ_goals_time(str_value):
 def analyze_report(url, team1, team2):
     """
         Return a list of:
+
+        - total game time
 
         - total penalty minutes for team 1  
         - total penalty minutes for team 2  
@@ -148,14 +151,12 @@ def analyze_report(url, team1, team2):
 
         if len(row_data) == 10:
 
-            period = 4 if row_data[1] == 'OT' else int(row_data[1])
-
-            # print(row_data, period, section)
+            period = 4 if row_data[1] not in '123' else int(row_data[1])
 
             penalties[section - 1][period - 1] += process_time(row_data[2])
 
-    data += penalties[0] + penalties[1]
-
+    data += [sum(penalties[0]), sum(penalties[1])] + penalties[0] + penalties[1]
+ 
     # Step 2: finding period shots and goals
 
     # Find the first table that starts with the specified row
@@ -183,7 +184,7 @@ def analyze_report(url, team1, team2):
         if row_data[0] == 'TOT':
             continue
 
-        period = 4 if row_data[0] == 'OT' else int(row_data[0])
+        period = 4 if row_data[0] not in '123' else int(row_data[0])
         goals = int(row_data[1])
         shots = int(row_data[2])
 
@@ -282,11 +283,16 @@ def analyze_report(url, team1, team2):
         if (team1 in first_row.get_text().lower()) or (team2 in first_row.get_text().lower()):
             goaltender_tables.append(table)
     
+    game_time = None
     goaltenders = [[0, 0], [0, 0]]
     analyzed_goaltenders = 0
     for row in goaltender_tables[0].find_all('tr'):
 
         row_data = [cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]
+
+        if row_data[0] == 'TEAM TOTALS' and game_time is None:
+            game_time = process_time(row_data[4])
+            continue
 
         if len(row_data) < 2: 
             continue
@@ -299,11 +305,13 @@ def analyze_report(url, team1, team2):
         analyzed_goaltenders += 1
 
     # because of overtime empty net cant be negative
-    data += goaltenders[0] + [max(3600 - sum(goaltenders[0]), 0)] + goaltenders[1] + [max(3600 - sum(goaltenders[0]), 0)]
+    data += goaltenders[0] + [max(3600 - sum(goaltenders[0]), 0)] + goaltenders[1] + [max(3600 - sum(goaltenders[1]), 0)]
+    
+    data = [game_time] + data
 
     return data
     
-def analyze_league(url):
+def analyze_league(url, min = 0, max = -1):
 
     response = requests.get(url)
     if response.status_code != 200:
@@ -313,41 +321,43 @@ def analyze_league(url):
 
     # Find the table rows (tr) with the specified structure
     target_data = []
-    for row in soup.find_all('tr'):
+    list_of_cells = [row.find_all('td') for row in soup.find_all('tr') if row.find_all('td')]
+    max = len(list_of_cells) if max == -1 else max
+    for cells in list_of_cells[min:max]:
+        
+        row_data = [cell.get_text(strip=True) for cell in cells]
 
-        # Extract the data within each row (td elements)
-        cells = row.find_all('td')
-        if cells:
-            row_data = [cell.get_text(strip=True) for cell in cells]
+        hometeam, otherteam = row_data[2].split('-')
+        hometeam = hometeam.lower()
+        otherteam = otherteam.lower()
 
-            hometeam, otherteam = row_data[3].split('-')
-            hometeam = hometeam.lower()
-            otherteam = otherteam.lower()
-            changed_row_data = row_data[:3] + [hometeam, otherteam] + row_data[4:] 
+        points1, points2 = row_data[3].split('-')
 
-            target_data.append(changed_row_data)
+        changed_row_data = row_data[:2] + [hometeam, otherteam, points1, points2] + row_data[4:] 
 
-    for i, link in enumerate(soup.find_all('a')):
-        href = link.get('href')
+        target_data.append(changed_row_data)
 
-        if 'http://www.nhl.com/scores/htmlreports' not in href:
-            continue
+    links = [link.get('href') for link in soup.find_all('a') if 'http://www.nhl.com/scores/htmlreports' in link.get('href')]
+    links = links[min:max]
+    for i, link in enumerate(links):
 
-        print(href)
+        print(f"around {i/len(links) * 100:.2f}% completed")
 
-        target_data[i].append(href)
+        target_data[i].append(link)
 
-        other_data = analyze_report(href, target_data[i][3], target_data[i][4])
+        other_data = analyze_report(link, target_data[i][3], target_data[i][4])
 
         target_data[i] += other_data
-
-        # if i > 1: break
 
     # Write the extracted data to a CSV file
     with open('output.csv', 'w', newline='') as csv_file:
         csv_writer = csv.writer(csv_file)
-        csv_writer.writerow(["id", "stage", "date", "hometeam", "otherteam", "score", "scoretype", "location", "attendance", 
-                             "reportlink", "penalty_tot1", "penalty_tot2", 
+        csv_writer.writerow(["id", "stage", "date", "hometeam", "otherteam", "points1", "points2", "scoretype", "location", "attendance", 
+                             "reportlink", 
+
+                             "total_gametime",
+
+                             "penalty_tot1", "penalty_tot2",
 
                              "team_1_penalty_p1", "team_1_penalty_p2", "team_1_penalty_p3", "team_1_penalty_ot",
                              "team_2_penalty_p1", "team_2_penalty_p2", "team_2_penalty_p3", "team_2_penalty_ot", 
@@ -372,22 +382,29 @@ def analyze_league(url):
                              "team_2_es_3v3_occ", "team_2_es_3v3_goal", "team_2_es_3v3_time",
 
                              "team_1_goaltender_1_time", "team_1_goaltender_2_time", "team_1_empty_net_time",
-                             "team_2_goaltender_1_time", "team_2_goaltender_2_time"  "team_2_empty_net_time"
+                             "team_2_goaltender_1_time", "team_2_goaltender_2_time",  "team_2_empty_net_time"
 
                              ])
         for i, row_data in enumerate(target_data):
 
-            csv_writer.writerow([i] + row_data)
+            csv_writer.writerow([i + min + 1] + row_data)
 
     print("Data has been successfully extracted and saved to 'output.csv'.")
 
+def get_args():
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--nhl_league_link', type=str, default="https://hockey.sigmagfx.com/compseason/nhl/1819/games")
+
+    parser.add_argument('--first_match', type=int, default=0)
+    parser.add_argument('--last_match', type=int, default=-1, help='-1 means the actual last match (it later gets set to the maximum possible value)')
+
+    args = parser.parse_args()
+
+    return args
+
 if __name__ == '__main__':
 
-    # data = analyze_report('https://www.nhl.com/scores/htmlreports/20182019/GS020004.HTM', 'anaheim ducks', 'san hose sharks')
-    # print(data)
-
-    # data = analyze_report('https://www.nhl.com/scores/htmlreports/20182019/GS020020.HTM')
-    # print(data)
-
-    main_url = "https://hockey.sigmagfx.com/compseason/nhl/1819/games"  
-    analyze_league(main_url)
+    args = get_args()
+    analyze_league(args.nhl_league_link, min = args.first_match, max = args.last_match)
